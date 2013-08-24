@@ -112,59 +112,74 @@ char* translate_path(const char* path) {
 }
 
 /* Convert file extension between opus and flac. */
-void convert_path(char* path, int toflac, const char* parent) {
+void convert_path(char* path, int filetype, const char* parent) {
     
     char* ptr;
-    char full_path[strlen(path) + strlen(parent) + 24];
+    char full_path[strlen(path) + strlen(parent) + strlen(params.basepath) + 9];
     GstDiscovererInfo* info;
     GList* stream_list;
     GstDiscovererAudioInfo* astream;
     double bitrate;
 
-    // nasty way of building the URI.
-    //TODO: find a way to do this properly
-
-    snprintf(full_path, sizeof full_path, "%s%s%s%s", "file:///home/gid/Music", parent, "/", path);
+    snprintf(full_path, sizeof full_path, "%s%s%s%s%s", "file://", params.basepath, parent, "/", path);
     ptr = strrchr(path, '.');
-    if (toflac) {
-        if (ptr && strcmp(ptr, ".opus") == 0) {
-            strcpy(ptr, ".flac");
-        }
-    } else {
 
-        /* Add a request to process synchronously the URI passed through the command line */
-        info = gst_discoverer_discover_uri(data.discoverer, full_path, NULL);
 
-        if (!info) {
-            transcodefs_debug("Failed to start discovering URI '%s'\n", full_path);
-            g_object_unref(data.discoverer);
-        } else {
-            // if the file is flac, rename immediately
-            if (ptr && strcmp(ptr, ".flac") == 0) {
-                strcpy(ptr, ".opus");
-            } else { // otherwise check its bitrate to see if it's above the threshold
-            
-                // get the stream list
-                stream_list = gst_discoverer_info_get_audio_streams(info);
-                
-                //TODO: Handle multiple audio streams intelligently
-                transcodefs_debug("Found %d streams in %s", g_list_length(stream_list), full_path);
-                if (g_list_first(stream_list)) {
-                    astream = g_list_nth_data(stream_list,0);
+    switch (filetype) {
+        case 1:
+            if (ptr) {
+                strcpy(ptr, ".flac");
+            }
+            break;
+        
+        case 2:
+            if (ptr) {
+                strcpy(ptr, ".mp3");
+            }
+            break;
+        
+        case 3:
+            if (ptr) {
+                strcpy(ptr, ".ogg");
+            }
+            break;
+    
+        default : 
 
-                    bitrate = gst_discoverer_audio_info_get_bitrate(astream) / 1000;
-                    transcodefs_debug("Found bitrate of %f for %s", bitrate, full_path);
-                }
-                // free the list of streams
-                gst_discoverer_stream_info_list_free(stream_list); 
-                if ( bitrate >= data.thresholdbitrate) {
+            /* Add a request to process synchronously the URI passed through the command line */
+            info = gst_discoverer_discover_uri(data.discoverer, full_path, NULL);
+
+            if (!info) {
+                transcodefs_debug("Failed to start discovering URI '%s'\n", full_path);
+                g_object_unref(data.discoverer);
+            } else {
+                // if the file is flac, rename immediately
+                if (ptr && strcmp(ptr, ".flac") == 0) {
                     strcpy(ptr, ".opus");
-                }
-            }  
-        }
+                } else { // otherwise check its bitrate to see if it's above the threshold
+                
+                    // get the stream list
+                    stream_list = gst_discoverer_info_get_audio_streams(info);
+                    
+                    //TODO: Handle multiple audio streams intelligently
+                    transcodefs_debug("Found %d streams in %s", g_list_length(stream_list), full_path);
+                    if (g_list_first(stream_list)) {
+                        astream = g_list_nth_data(stream_list,0);
+
+                        bitrate = gst_discoverer_audio_info_get_bitrate(astream) / 1000;
+                        transcodefs_debug("Found bitrate of %.0f for %s", bitrate, full_path);
+                    }
+                    // free the list of streams
+                    gst_discoverer_stream_info_list_free(stream_list); 
+                    if ( bitrate >= data.thresholdbitrate) {
+                        strcpy(ptr, ".opus");
+                    }
+                }  
+            }
+
+            break;
     }
 }
-
 
 static int transcodefs_readlink(const char *path, char *buf, size_t size) {
     char* origpath;
@@ -183,8 +198,17 @@ static int transcodefs_readlink(const char *path, char *buf, size_t size) {
     
     len = readlink(origpath, buf, size - 2);
     if (len == -1) {
-        goto readlink_fail;
+        transcodefs_debug("Readlink fail for %s", origpath);
+        
+        convert_path(origpath, 2, path);
+        
+        len = readlink(origpath, buf, size - 2);
+        if (len == -1) {
+            transcodefs_debug("Readlink fail for %s", origpath);
+            goto readlink_fail;
+        }
     }
+    transcodefs_debug("Readlink SUCCESS for %s", origpath);
     
     buf[len] = '\0';
     
@@ -221,8 +245,16 @@ static int transcodefs_getattr(const char *path, struct stat *stbuf) {
     convert_path(origpath, 1, path);
     
     if (lstat(origpath, stbuf) == -1) {
-        goto stat_fail;
+        transcodefs_debug("Stat fail for %s", origpath);
+        
+        convert_path(origpath, 2, path);
+        
+        if (lstat(origpath, stbuf) == -1) {
+            transcodefs_debug("Stat fail for %s", origpath);
+            goto stat_fail;
+        }
     }
+    transcodefs_debug("Stat SUCCESS for %s", origpath);
     
     /*
      * Get size for resulting mp3 from regular file, otherwise it's a
@@ -332,6 +364,20 @@ static int transcodefs_open(const char *path, struct fuse_file_info *fi) {
     }
     
     convert_path(origpath, 1, path);
+    
+    fd = open(origpath, fi->flags);
+    
+    if (fd == -1) {
+        convert_path(origpath, 2, path);
+        
+        fd = open(origpath, fi->flags);
+
+    } 
+    /* File is real and can be opened. */
+    if (fd != -1) {
+        close(fd);
+        goto passthrough;
+    }
     
     //trans = transcoder_new(origpath);
     //if (!trans) {
