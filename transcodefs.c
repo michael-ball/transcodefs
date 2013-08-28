@@ -115,13 +115,14 @@ char* translate_path(const char* path) {
 void convert_path(char* path, int filetype, const char* parent) {
     
     char* ptr;
-    char full_path[strlen(path) + strlen(parent) + strlen(params.basepath) + 9];
+    char* prefix = "file://";
+    char full_path[strlen(path) + strlen(parent) + strlen(params.basepath) + strlen(prefix) + 2];
     GstDiscovererInfo* info;
     GList* stream_list;
     GstDiscovererAudioInfo* astream;
     double bitrate;
 
-    snprintf(full_path, sizeof full_path, "%s%s%s%s%s", "file://", params.basepath, parent, "/", path);
+    snprintf(full_path, sizeof full_path, "%s%s%s%s%s", prefix, params.basepath, parent, "/", path);
     ptr = strrchr(path, '.');
 
 
@@ -176,8 +177,6 @@ void convert_path(char* path, int filetype, const char* parent) {
                     }
                 }  
             }
-
-            break;
     }
 }
 
@@ -249,6 +248,8 @@ static int transcodefs_getattr(const char *path, struct stat *stbuf) {
         
         convert_path(origpath, 2, path);
         
+        errno = 0;
+
         if (lstat(origpath, stbuf) == -1) {
             transcodefs_debug("Stat fail for %s", origpath);
             goto stat_fail;
@@ -368,6 +369,7 @@ static int transcodefs_open(const char *path, struct fuse_file_info *fi) {
     fd = open(origpath, fi->flags);
     
     if (fd == -1) {
+        errno = 0;
         convert_path(origpath, 2, path);
         
         fd = open(origpath, fi->flags);
